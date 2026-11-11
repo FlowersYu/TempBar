@@ -48,6 +48,12 @@ if not any(b["name"] == BRANCH for b in branches):
     parent = seed["commit"]["sha"]
     print("初始化仓库 ->", parent)
     branches = gh(["api", f"repos/{REPO}/branches"])
+else:
+    # 分支已存在就拿它当前的 head 当父节点，保证历史是线性的，
+    # 不然每推一次都是一个新的无父 commit，github 上会显示成两条无关历史。
+    ref = gh(["api", f"repos/{REPO}/git/ref/heads/{BRANCH}"])
+    parent = ref["object"]["sha"]
+    print("父节点 ->", parent)
 
 tree = []
 for f in files:
