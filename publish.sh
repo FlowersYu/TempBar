@@ -48,7 +48,12 @@ JSON
 echo "==> 上传 $VERSION (build $BUILD)  $(( SIZE / 1024 ))K"
 scp -q -o LogLevel=ERROR "$ZIP" "$SERVER:$REMOTE/TempBar.zip"
 scp -q -o LogLevel=ERROR dist/updates.json "$SERVER:$REMOTE/updates.json"
-ssh -o LogLevel=ERROR "$SERVER" "chmod 644 $REMOTE/* && ls -lh $REMOTE"
+# 权限要分开设：目录必须带 x（755），否则 nginx 进不去，
+# 表现是网页正常但所有图片 403。
+# 之前这里写的是 chmod 644 $REMOTE/*，连目录一起 644 了，
+# 结果每发一次版就把 assets 目录的可执行位抹掉一次。
+ssh -o LogLevel=ERROR "$SERVER" \
+  "find $REMOTE -type d -exec chmod 755 {} + && find $REMOTE -type f -exec chmod 644 {} + && ls -lh $REMOTE"
 
 echo ""
 echo "==> 验证"

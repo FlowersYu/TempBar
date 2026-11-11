@@ -6,6 +6,11 @@ final class Sparkline: NSView {
     var points: [Double] = [] { didSet { needsDisplay = true } }
     var lineColor: NSColor = .systemTeal { didSet { needsDisplay = true } }
     var showFill = true { didSet { needsDisplay = true } }
+    /// 线宽。毛玻璃主题上白线要比系统色的线再粗一点点才压得住,
+    /// 否则被背景的模糊一层一层洗淡，看着像没画。
+    var lineWidth: CGFloat = 1.6 { didSet { needsDisplay = true } }
+    /// 填充透明度。默认 0.10 是给浅色卡用的，玻璃上用 0.14 才看得出体积。
+    var fillAlpha: CGFloat = 0.10 { didSet { needsDisplay = true } }
     /// 画一条参考线（比如阈值上限）
     var reference: Double?
     var referenceColor: NSColor = .systemRed
@@ -45,7 +50,7 @@ final class Sparkline: NSView {
         }
 
         let path = NSBezierPath()
-        path.lineWidth = 1.6
+        path.lineWidth = lineWidth
         path.lineCapStyle = .round
         path.lineJoinStyle = .round
         for (i, v) in points.enumerated() {
@@ -62,7 +67,7 @@ final class Sparkline: NSView {
             fill.line(to: CGPoint(x: bounds.width, y: bounds.height))
             fill.line(to: CGPoint(x: 0, y: bounds.height))
             fill.close()
-            lineColor.withAlphaComponent(0.10).setFill()
+            lineColor.withAlphaComponent(fillAlpha).setFill()
             fill.fill()
         }
 
@@ -84,7 +89,15 @@ final class Sparkline: NSView {
 
 /// 圆角卡片容器。NSPanel 本身不做圆角裁剪，得自己画。
 final class CardView: NSView {
-    var radius: CGFloat = 14
+    /// 圆角半径。设置时同步到 layer ——
+    /// 毛玻璃主题用 layer 的连续曲率圆角（见 usesLayerMask），
+    /// 那里用的是 layer.cornerRadius，不跟着改就还是旧半径。
+    var radius: CGFloat = 14 {
+        didSet {
+            layer?.cornerRadius = radius
+            needsDisplay = true
+        }
+    }
     var fill: NSColor = .clear
     var borderColor: NSColor = .clear
     var borderWidth: CGFloat = 0.5
@@ -92,6 +105,27 @@ final class CardView: NSView {
     /// 用系统"浅填充"风格。颜色在 draw 时按当前外观解析，
     /// 因为动态 NSColor 在离屏渲染时拿不到外观上下文，会退化成黑色。
     var subtle = false
+
+    /// 圆角交给 layer 的连续曲率（squircle）裁剪，draw 里铺满整个 bounds。
+    ///
+    /// 为什么值得单独开一条路：苹果的组件圆角不是正圆角，是超椭圆，
+    /// 拿圆角矩形并排一比，转角那一小段弧度立刻能看出来"这个不是苹果的"。
+    /// `NSBezierPath(roundedRect:)` 只能画正圆角，而 `CALayer.cornerCurve = .continuous`
+    /// 才是系统那套曲线 —— 所以让 layer 去裁，我们只管把颜色铺满。
+    var usesLayerMask = false {
+        didSet {
+            layer?.masksToBounds = usesLayerMask
+            needsDisplay = true
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerCurve = .continuous
+    }
+
+    required init?(coder: NSCoder) { fatalError("不支持归档）") }
 
     // 为什么不能直接把 `NSColor.textBackgroundColor.withAlphaComponent(0.96)`
     // 存进 fill：`withAlphaComponent` 会返回一个"静态"颜色，
@@ -162,17 +196,39 @@ final class CardView: NSView {
         return fill
     }
 
-    /// 竖向渐变填充。仿苹果主题用。
+    /// 竖向渐变填充。毛玻璃主题用。
     ///
     /// 为什么单独做一个入口：渐变不能靠 fill 一个 NSColor 表达，
     /// 必须在 draw 里画 NSGradient。而组件主题是"固定外观"的
-    /// （苹果那个卡片不管系统深浅色都是紫蓝渐变），
+    /// （玻璃卡不管系统深浅色都是同一层深色叠色），
     /// 所以这里存的是字面 RGB，不走动态色解析。
     struct Gradient {
         var top: NSColor
         var bottom: NSColor
+        /// 中间停靠点。三段比两段自然得多：纯两端线性插值时，
+        /// 中间那段是一条"值一样"的色带，看着像蒙了一层灰。
+        var mid: NSColor?
     }
     var gradientFill: Gradient? {
+        didSet { needsDisplay = true }
+    }
+
+    /// 叠在渐变之上的玻璃质感层。
+    ///
+    /// 真正的模糊来自背景后的 NSVisualEffectView，这里画的是"玻璃本身的厚度"：
+    ///   glow     一大团柔光，模拟玻璃后面有一处光源（没有它就只是一块半透明色块）
+    ///   sheen    顶部一道极淡的白，玻璃上边缘受光的那一条
+    ///   hairline 内侧一圈 1px 细边，玻璃的边缘折射
+    struct GlassOverlay {
+        var glow: NSColor
+        /// 柔光中心，按比例取（0,0 左下，1,1 右上）
+        var glowCenter: NSPoint = NSPoint(x: 0.8, y: 0.85)
+        /// 柔光半径，相对卡片较短边
+        var glowRadius: CGFloat = 0.9
+        var sheen: CGFloat = 0.12
+        var hairline: CGFloat = 0.2
+    }
+    var glassOverlay: GlassOverlay? {
         didSet { needsDisplay = true }
     }
 
@@ -185,14 +241,26 @@ final class CardView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        guard bounds.width > 1, bounds.height > 1 else { return }
+
+        if usesLayerMask {
+            // 圆角由 layer 的连续曲率裁，这里铺满整个 bounds 即可
+            if let g = gradientFill {
+                drawStops(g, in: bounds)
+            } else {
+                let f = resolvedFill()
+                if f.alphaComponent > 0 { f.setFill(); bounds.fill() }
+            }
+            if let ov = glassOverlay { drawGlassOverlay(ov, in: bounds) }
+            return
+        }
+
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: borderWidth / 2, dy: borderWidth / 2),
                                 xRadius: radius, yRadius: radius)
         if let g = gradientFill {
-            // 圆角裁剪后画竖向渐变：从左上的深紫到右下的亮紫，
-            // 和苹果天气组件那种"光照从左上打过来"的观感一致。
             NSGraphicsContext.saveGraphicsState()
             path.addClip()
-            NSGradient(starting: g.top, ending: g.bottom)?.draw(in: bounds, angle: -90)
+            drawStops(g, in: bounds)
             NSGraphicsContext.restoreGraphicsState()
         } else {
             let f = resolvedFill()
@@ -205,6 +273,49 @@ final class CardView: NSView {
             b.setStroke()
             path.lineWidth = borderWidth
             path.stroke()
+        }
+    }
+
+    /// 画（可多段的）竖向渐变。
+    private func drawStops(_ g: Gradient, in rect: NSRect) {
+        if let mid = g.mid {
+            NSGradient(colors: [g.top, mid, g.bottom],
+                       atLocations: [0, 0.46, 1],
+                       colorSpace: .sRGB)?.draw(in: rect, angle: -90)
+        } else {
+            NSGradient(starting: g.top, ending: g.bottom)?.draw(in: rect, angle: -90)
+        }
+    }
+
+    /// 玻璃的"厚度"：柔光 + 顶部受光 + 内侧细边。
+    /// 三样都很淡（加起来不到 30% 不透明度），叠起来才有玻璃感；
+    /// 单看任何一层都只是"卡片上有点脏"。
+    private func drawGlassOverlay(_ ov: GlassOverlay, in rect: NSRect) {
+        // 1) 柔光。非翻转坐标系，y 大的是上面。
+        let r = min(rect.width, rect.height) * ov.glowRadius
+        let cx = rect.minX + rect.width * ov.glowCenter.x
+        let cy = rect.minY + rect.height * ov.glowCenter.y
+        let glowRect = NSRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)
+        if let gg = NSGradient(colors: [ov.glow, ov.glow.withAlphaComponent(0)]) {
+            gg.draw(in: glowRect, relativeCenterPosition: .zero)
+        }
+
+        // 2) 顶部受光：只覆盖上半部分，往下淡出到透明
+        if ov.sheen > 0 {
+            let h = rect.height * 0.55
+            let topRect = NSRect(x: rect.minX, y: rect.maxY - h, width: rect.width, height: h)
+            let c = NSColor.white.withAlphaComponent(ov.sheen)
+            NSGradient(colors: [c, c.withAlphaComponent(0)])?.draw(in: topRect, angle: -90)
+        }
+
+        // 3) 内侧细边。inset 0.5 让 1pt 的描边正好落在像素中间，不发虚。
+        if ov.hairline > 0 {
+            let rr = max(0, radius - 0.5)
+            let p = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5),
+                                 xRadius: rr, yRadius: rr)
+            p.lineWidth = 1
+            NSColor.white.withAlphaComponent(ov.hairline).setStroke()
+            p.stroke()
         }
     }
 }

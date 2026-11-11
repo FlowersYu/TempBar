@@ -25,8 +25,14 @@ final class Updater {
 
     static let shared = Updater()
 
-    /// 换服务器只改这一行
-    static let feedURL = URL(string: "http://36.111.167.161:8888/tempbar/updates.json")!
+    /// 更新源地址在打包时写进 Info.plist（见 build.sh，从 publish.env 取）。
+    /// 仓库里不留具体地址 —— 谁部署谁填自己的。
+    /// 读不到就当成"这个包没配置更新源"，检查更新直接跳过，不报错。
+    static let feedURL: URL? = {
+        guard let s = Bundle.main.object(forInfoDictionaryKey: "NSUpdateFeedURL") as? String,
+              !s.isEmpty, let u = URL(string: s), u.scheme != nil else { return nil }
+        return u
+    }()
 
     static var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
@@ -58,9 +64,14 @@ final class Updater {
     ///   启动时的静默检查传 false，没网没服务器时不要弹窗打扰。
     func check(interactive: Bool) {
         guard !busy else { return }
+        guard let feed = Self.feedURL else {
+            NSLog("TempBar 没有配置更新源（Info.plist 缺 NSUpdateFeedURL），跳过检查")
+            if interactive { alert("这个包没有配置更新源", "打包时没有写入更新地址，无法检查更新。") }
+            return
+        }
         busy = true
 
-        var req = URLRequest(url: Self.feedURL)
+        var req = URLRequest(url: feed)
         req.timeoutInterval = 8
         // 必须绕开缓存：CDN 或系统缓存会把旧清单喂回来，
         // 表现就是"发了新版但同事那边永远提示已是最新"。

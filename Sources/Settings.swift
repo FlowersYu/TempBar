@@ -423,12 +423,13 @@ final class SettingsWindowController: NSWindowController {
         let sizeRaw = UserDefaults.standard.string(forKey: "tempbar.widget.size")
         let themeRaw = UserDefaults.standard.string(forKey: "tempbar.widget.theme")
 
-        // 兼容老存档：老版本会把 "apple" 存在尺寸键里
+        // 兼容老存档：老版本会把 "apple" 存在尺寸键里，
+        // 主题键里也可能还是 "apple"（那时候这套主题叫「仿苹果」）。
         var size = sizeRaw.flatMap(WidgetSize.init(rawValue:)) ?? .medium
-        var theme = themeRaw.flatMap(WidgetTheme.init(rawValue:)) ?? .classic
+        var theme = WidgetTheme.stored(themeRaw)
         if sizeRaw == "apple" {
             size = .large
-            theme = .apple
+            theme = .glass
         }
 
         for i in 0..<sizePopup.numberOfItems {

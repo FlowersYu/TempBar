@@ -2,9 +2,9 @@
 
 把办公室里的温湿度计数据，直接放到每台 Mac 的桌面上。
 
-- **官网 / 下载**：<http://36.111.167.161:8888/tempbar/>
 - **要求**：macOS 13+，Apple Silicon
-- **直接下载**：<http://36.111.167.161:8888/tempbar/TempBar.zip>（解压后右键「打开」一次）
+- **官网 / 下载**：页面是 `site/` 目录，由 `publish.sh` 发到自己的服务器；
+  服务器地址写在本地 `publish.env`（参考 `publish.env.example`），不随仓库分发
 
 ---
 

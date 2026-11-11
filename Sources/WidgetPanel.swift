@@ -59,13 +59,26 @@ enum WidgetSize: String, Codable, CaseIterable {
 enum WidgetTheme: String, Codable, CaseIterable {
     /// 经典：系统动态色的浅色卡片，跟随系统深浅色
     case classic
-    /// 仿苹果天气组件：固定深紫渐变 + 白色细体字
-    case apple
+    /// 毛玻璃：真·背景模糊（桌面上透出壁纸）+ 深色叠色 + 白色层级文字
+    case glass
 
     var title: String {
         switch self {
         case .classic: return "经典"
-        case .apple: return "仿苹果"
+        case .glass: return "毛玻璃"
+        }
+    }
+
+    /// 从存档里读主题。
+    ///
+    /// 老版本的这套主题叫 "apple"（当年只有一个紫渐变），
+    /// 现在换成了真正的毛玻璃，rawValue 也跟着改成 "glass"。
+    /// 老用户存档里还是 "apple"，这里翻译过去 ——
+    /// 不认的话他升级后主题会静默掉回经典，等于我们把他设的东西改了。
+    static func stored(_ raw: String?) -> WidgetTheme {
+        switch raw {
+        case "glass", "apple": return .glass
+        default: return .classic
         }
     }
 }
@@ -81,6 +94,8 @@ enum WidgetTheme: String, Codable, CaseIterable {
 final class WidgetPanel: NSPanel {
 
     private var card: CardView!
+    /// 毛玻璃主题的背景模糊层。垫在 card 底下，只有玻璃主题显示。
+    private var blur: NSVisualEffectView!
     private var contentStack: NSStackView!
     /// contentStack 相对卡片的边距约束。切换尺寸时布局方式不同，
     /// 需要先全部解除再重建，否则新旧两套互斥约束并存会冲突。
@@ -117,10 +132,9 @@ final class WidgetPanel: NSPanel {
         }
 
         if legacyApple {
-            theme_ = .apple
+            theme_ = .glass
         } else {
-            theme_ = UserDefaults.standard.string(forKey: Self.themeKey)
-                .flatMap(WidgetTheme.init(rawValue:)) ?? .classic
+            theme_ = WidgetTheme.stored(UserDefaults.standard.string(forKey: Self.themeKey))
         }
 
         super.init(
@@ -153,6 +167,28 @@ final class WidgetPanel: NSPanel {
         let container = ContainerView()
         container.wantsLayer = false
         contentView = container
+
+        // 背景模糊层。垫在卡片底下，卡片用半透明叠色盖在它上面，
+        // 两者叠起来就是 macOS 自己那套"毛玻璃"观感。
+        //
+        // 三个参数缺一不可：
+        //   material = .hudWindow      偏深的材质，白字压上去才有对比
+        //   blendingMode = .behindWindow 模糊的是窗口**后面**的壁纸；
+        //                                .withinWindow 只模糊同窗口内的兄弟视图，
+        //                                在桌面上就是一块死板的半透明色
+        //   state = .active            必须钉死。默认的 .followsWindowActiveState
+        //                                在窗口不活跃时会把模糊退成一块灰饼 ——
+        //                                一个桌面挂件几乎永远不活跃，不钉住就等于没有毛玻璃
+        blur = NSVisualEffectView()
+        blur.material = .hudWindow
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.isEmphasized = false
+        blur.translatesAutoresizingMaskIntoConstraints = true
+        blur.autoresizingMask = [.width, .height]
+        blur.frame = container.bounds
+        blur.isHidden = true          // 经典主题不需要，由 applyCardStyle 打开
+        container.addSubview(blur)
 
         card = CardView()
         card.radius = size_.cornerRadius
@@ -197,7 +233,7 @@ final class WidgetPanel: NSPanel {
         // 迁移完成后把新值落盘，下次就走正常分支了
         if legacyApple {
             UserDefaults.standard.set(WidgetSize.large.rawValue, forKey: Self.sizeKey)
-            UserDefaults.standard.set(WidgetTheme.apple.rawValue, forKey: Self.themeKey)
+            UserDefaults.standard.set(WidgetTheme.glass.rawValue, forKey: Self.themeKey)
         }
 
         // 秒级刷新：广播间隔约 10 秒，1 秒刷一次足够，CPU 占用可忽略
@@ -239,11 +275,9 @@ final class WidgetPanel: NSPanel {
         NSLayoutConstraint.deactivate(contentConstraints)
         contentConstraints.removeAll()
 
-        // 仿苹果小号用 11pt 留白：HIG 明确说紧凑分组可用 11（标准是 16）。
-        // 小号要在一张 158×158 里塞下「名称 + 大温度 + 湿度 + 最高最低」四行，
-        // 用 16 的话垂直空间只剩 126，四行排不下。
-        // 对着苹果那张对比图看，它的小号内容离边缘也只有 10pt 左右。
-        let inset: CGFloat = (theme_ == .apple && size_ == .small) ? 14 : size_.contentInset
+        // 毛玻璃小号用 14pt 留白：HIG 说紧凑分组可用 11（标准是 16）。
+        // 小号要在一张 158×158 里塞下四行，留 16 就排不下。
+        let inset: CGFloat = (theme_ == .glass && size_ == .small) ? 14 : size_.contentInset
         let isLarge = size_ == .large
         let vInset: CGFloat = isLarge ? 20 : inset
         // 仿苹果在**所有尺寸**下都是左上角起排。
@@ -254,7 +288,7 @@ final class WidgetPanel: NSPanel {
         // 左边缘是一条竖线，压根没居中。
         // 中央对齐会让人以为卡片里"中间有一坨东西"，和桌面上其它组件并排很跳。
         // 经典主题的小/中号仍保持居中，它本来就是一块信息牌，不追求和苹果一致。
-        contentStack.alignment = (isLarge || theme_ == .apple) ? .leading : .centerX
+        contentStack.alignment = (isLarge || theme_ == .glass) ? .leading : .centerX
 
         var c = [
             contentStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: inset),
@@ -281,30 +315,52 @@ final class WidgetPanel: NSPanel {
     // MARK: 主题
 
     /// 套用卡片外观。只看**主题**，和尺寸无关 ——
-    /// 小号也可以要仿苹果的紫渐变，大号也可以要经典的浅色卡。
+    /// 小号也可以要毛玻璃，大号也可以要经典的浅色卡。
     ///
     /// 经典主题用系统动态色，跟随深浅色；
-    /// 仿苹果刻意用固定的紫蓝渐变 —— 苹果天气组件本身就不跟随系统深浅色，
-    /// 它的配色是"天气"的一部分，不是"外观"的一部分。所以这里不走
-    /// setDynamicFill 那条路，直接给字面 RGB。
+    /// 玻璃主题是"看得见壁纸的一层深色玻璃"，固定配色、不跟随系统外观
+    /// （系统切深色不会让它更黑，只会让桌面上其它东西变深）。
     private func applyCardStyle() {
         card.radius = size_.cornerRadius
 
-        if theme_ == .apple {
-            // 渐变端点直接取自苹果截图的实测像素（x=60 竖直采样，避开文字）：
-            //   顶部 rgba(20, 0, 149) → 底部 rgba(58, 13, 195)
-            // 注意绿色通道几乎为 0 —— 这是深靛蓝到紫蓝的过渡，
-            // 不是那种发紫的亮蓝。之前凭感觉写了个偏亮的版本，
-            // 并排一看就是我们这边"轻"、苹果那张"沉"。
+        if theme_ == .glass {
+            blur.isHidden = false
+            // 模糊层不吃 layer 圆角（它的模糊是窗口服务器在 layer 之外合成的），
+            // 只能走 maskImage 这条官方路径做圆角。
+            blur.maskImage = Self.roundedMask(radius: card.radius)
+
+            // 卡片这边用 layer 的连续曲率裁圆角（苹果的超椭圆），
+            // 自己 draw 只负责铺色。
+            card.usesLayerMask = true
+            card.layer?.cornerRadius = card.radius
+            card.layer?.masksToBounds = true
+
+            // 叠色：深靛蓝→紫，带透明度。透明度是玻璃的关键 ——
+            // 全不透明就只是一张深色卡，后面的模糊一点也透不出来。
+            //
+            // 但也不能太透：用户壁纸是亮的（雪山那张），
+            // 透太多白字就糊了。0.55~0.70 这一档是"看得见壁纸、
+            // 又压得住白字"的平衡点，实测在这个区间里两头都成立。
             card.gradientFill = CardView.Gradient(
-                top: NSColor(srgbRed: 20 / 255.0, green: 0 / 255.0, blue: 149 / 255.0, alpha: 1),
-                bottom: NSColor(srgbRed: 58 / 255.0, green: 13 / 255.0, blue: 195 / 255.0, alpha: 1)
+                top: NSColor(srgbRed: 0.07, green: 0.06, blue: 0.16, alpha: 0.70),
+                bottom: NSColor(srgbRed: 0.20, green: 0.10, blue: 0.35, alpha: 0.56),
+                mid: NSColor(srgbRed: 0.12, green: 0.08, blue: 0.27, alpha: 0.64)
             )
-            // 无边框：苹果那张卡没有描边，靠渐变和阴影分层
+            card.glassOverlay = CardView.GlassOverlay(
+                glow: NSColor(srgbRed: 0.45, green: 0.33, blue: 1.0, alpha: 0.30),
+                glowCenter: NSPoint(x: 0.82, y: 0.84),
+                glowRadius: 0.95,
+                sheen: 0.10,
+                hairline: 0.22
+            )
             card.borderWidth = 0
             card.borderColor = .clear
         } else {
+            blur.isHidden = true
+            card.usesLayerMask = false
+            card.layer?.masksToBounds = false
             card.gradientFill = nil
+            card.glassOverlay = nil
             card.setDynamicFill(.textBackgroundColor, alpha: 0.96)
             card.setDynamicBorder(.labelColor, alpha: 0.10, width: 1)
         }
@@ -312,6 +368,24 @@ final class WidgetPanel: NSPanel {
         // 这里别再动 card.layer 的 shadow —— 两层一叠，圆角外就会露出灰框。
         card.layer?.shadowOpacity = 0
         card.needsDisplay = true
+    }
+
+    /// 给 NSVisualEffectView 做圆角遮罩。
+    ///
+    /// 用 maskImage 而不是 layer.cornerRadius：模糊效果由窗口服务器合成，
+    /// 在视图 layer 之外，layer 圆角只能裁掉视图自己画的内容，
+    /// 裁不掉那层模糊 —— 表现就是"四角还是方的，卡片里却有圆角"。
+    /// capInsets + .stretch 让同一张 9-patch 图适应任意尺寸，不用每次改尺寸重建。
+    private static func roundedMask(radius r: CGFloat) -> NSImage {
+        let d = r * 2 + 1
+        let img = NSImage(size: NSSize(width: d, height: d), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r).fill()
+            return true
+        }
+        img.capInsets = NSEdgeInsets(top: r, left: r, bottom: r, right: r)
+        img.resizingMode = .stretch
+        return img
     }
 
     // MARK: 层级
@@ -510,6 +584,14 @@ final class WidgetPanel: NSPanel {
     var cardSize: NSSize { card.frame.size }
     var currentSize: WidgetSize { size_ }
     var currentTheme: WidgetTheme { theme_ }
+    /// 自检用：卡片本体。
+    /// 内容区里现在垫了一张背景模糊层，`subviews.first` 已经不等于卡片了 ——
+    /// 拿错对象截出来的是一张空图，测什么都是"没找到内容"。
+    var cardView: NSView { card }
+    /// 自检用：模糊层是否按当前主题该显示的那样显示
+    var blurActive: Bool { !(blur?.isHidden ?? true) }
+    /// 自检用：卡片是不是在用 layer 的连续曲率圆角（苹果超椭圆）
+    var usesSquircleCorners: Bool { card.usesLayerMask }
 
 
     @objc private func togglePin() {
@@ -622,12 +704,12 @@ final class WidgetPanel: NSPanel {
         stack.alignment = .centerX
         stack.spacing = 6
 
-        // 文字颜色必须跟主题走：仿苹果那张是深紫底，
+        // 文字颜色必须跟主题走：玻璃是深色底，
         // 用 .labelColor 在浅色系统下就是黑字压深紫，等于看不见。
-        let isApple = theme_ == .apple
-        let mainColor: NSColor = isApple ? .white : .labelColor
-        let subColor: NSColor = isApple
-            ? NSColor.white.withAlphaComponent(0.78)
+        let isGlass = theme_ == .glass
+        let mainColor: NSColor = isGlass ? .white : .labelColor
+        let subColor: NSColor = isGlass
+            ? NSColor.white.withAlphaComponent(0.72)
             : .secondaryLabelColor
 
         let title = NSTextField(labelWithString: "等待温度计")
@@ -650,7 +732,7 @@ final class WidgetPanel: NSPanel {
         // 深色底上默认的转圈是深灰，几乎看不见。
         // NSProgressIndicator 没有 contentTintColor，
         // 但把它的 appearance 钉成 darkAqua，系统就会用浅色画这个控件。
-        if isApple { spin.appearance = NSAppearance(named: .darkAqua) }
+        if isGlass { spin.appearance = NSAppearance(named: .darkAqua) }
 
         stack.addArrangedSubview(title)
         stack.addArrangedSubview(hint)
@@ -662,8 +744,8 @@ final class WidgetPanel: NSPanel {
         // 主题先分叉，再在主题内部按尺寸排版。
         // 这样以后加第三套主题时，只需再写一个 makeXxxContent 分派，
         // 不用把尺寸的判断散落到每个角落。
-        if theme_ == .apple {
-            return makeAppleContent(dev: dev)
+        if theme_ == .glass {
+            return makeGlassContent(dev: dev)
         }
         return makeClassicContent(dev: dev)
     }
@@ -968,196 +1050,81 @@ final class WidgetPanel: NSPanel {
         return col
     }
 
-    /// 仿苹果主题在三个尺寸下的字号与间距。
+    /// 毛玻璃主题在三个尺寸下的字号与间距。
     ///
-    /// 只写一套固定数值的话，小号（158×158）里 96pt 的温度根本放不下，
-    /// 中号（338×158）又会被 96pt 顶得只剩一行。所以按尺寸给一档度量。
-    ///
-    /// 温度字号的定法：大号沿用实测值 96pt（对 354 高的卡）。
-    /// 其余两档按卡片较短边等比缩放 ——
-    ///   小 158/338 ≈ 0.47  → 96 × 0.47 ≈ 45，取 46
-    ///   中 158/338 ≈ 0.47  → 但中号是横条，宽度充裕，可以稍大，取 54
-    /// 字号都 ≥ 11pt，符合 HIG 的最小字号要求。
-    private struct AppleMetrics {
+    /// 和旧那套「仿苹果」的差别不只是配色：旧那套把小号四行硬挤进 158，
+    /// 结果窗口被内容顶到 166（自检里那条 `[apple-small] 窗口=158×166` 就是它），
+    /// 字也小得发虚。这套按 Mac 上真实组件的比例重排，
+    /// 小号四行只占 ~132pt，稳稳落在 158 里，那条遗留问题顺带消失。
+    private struct GlassMetrics {
         var nameSize: CGFloat
         var tempSize: CGFloat
-        /// 温度字重。苹果**不是所有尺寸都用细体**：
-        ///   小/中号是常规字重（regular）—— 尺寸小，细笔画会发虚
-        ///   大号才是 96pt thin
-        /// 之前三个尺寸一律 thin，拿你的小号截图一比，
-        /// 我们那个 23° 明显比苹果瘦一圈。
+        /// 温度字重。苹果并不是所有尺寸都用细体：
+        /// 小/中号温度小，细笔画会发虚，用 regular；大号 96pt 才用 thin。
         var tempWeight: NSFont.Weight
         var humSize: CGFloat
-        var humIconSize: CGFloat
-        var rangeValueSize: CGFloat
-        var rangeLabelSize: CGFloat
+        var humIcon: CGFloat
+        var rangeLabel: CGFloat
+        var rangeValue: CGFloat
+        var rangeGap: CGFloat
         var nameToTemp: CGFloat
         var tempToHum: CGFloat
         var humToRange: CGFloat
-        /// 最高/最低两组之间的间距
-        var rangeGap: CGFloat
-        /// 是否显示最高/最低那一行。三个尺寸都显示 ——
-        /// 苹果自己的小号组件（small）底下就有一行「最高 26° 最低 15°」，
-        /// 只留温度反而不像了。
         var showsRange: Bool
+        /// 走势曲线的高度。0 表示不画（小号放不下）。
+        /// 中/大号必须画：一块 338×354 的卡只有四行字，下面空 120pt，
+        /// 看着不像"留白"，像"没做完"。
+        var chartHeight: CGFloat
+        var chartCaption: CGFloat
 
-        static func forSize(_ s: WidgetSize) -> AppleMetrics {
+        static func forSize(_ s: WidgetSize) -> GlassMetrics {
             switch s {
             case .small:
-                // 数值是拿屏幕上的系统小号天气组件（1:1 像素，卡宽 158）量的：
-                //   名称 15pt semibold，温度墨迹高 ≈ 37pt、笔画偏细，
-                //   天气行 13-14pt，最高/最低数字 21pt + 竖排小标签 11pt
-                // 温度从 46 提到 48：46 时数字墨迹只有 33pt，比苹果那 37 矮一头，
-                // 并排看明显"瘦小"。再大就会把四行顶出卡外，48 是这一档的上限。
-                return AppleMetrics(nameSize: 15, tempSize: 48, tempWeight: .regular,
-                                    humSize: 13, humIconSize: 13,
-                                    rangeValueSize: 21, rangeLabelSize: 11,
-                                    nameToTemp: 0, tempToHum: 10, humToRange: 9,
-                                    rangeGap: 12, showsRange: true)
+                return GlassMetrics(nameSize: 13, tempSize: 44, tempWeight: .regular,
+                                    humSize: 12, humIcon: 11,
+                                    rangeLabel: 10, rangeValue: 15, rangeGap: 12,
+                                    nameToTemp: 0, tempToHum: 3, humToRange: 7,
+                                    showsRange: true,
+                                    chartHeight: 0, chartCaption: 0)
             case .medium:
-                return AppleMetrics(nameSize: 15, tempSize: 48, tempWeight: .regular,
-                                    humSize: 14, humIconSize: 14,
-                                    rangeValueSize: 26, rangeLabelSize: 11,
-                                    nameToTemp: 6, tempToHum: 8, humToRange: 10,
-                                    rangeGap: 18, showsRange: true)
+                return GlassMetrics(nameSize: 15, tempSize: 50, tempWeight: .regular,
+                                    humSize: 13, humIcon: 12,
+                                    rangeLabel: 11, rangeValue: 16, rangeGap: 16,
+                                    nameToTemp: 0, tempToHum: 4, humToRange: 7,
+                                    showsRange: true,
+                                    chartHeight: 84, chartCaption: 10)
             case .large:
-                return AppleMetrics(nameSize: 17, tempSize: 96, tempWeight: .thin,
-                                    humSize: 17, humIconSize: 17,
-                                    rangeValueSize: 38, rangeLabelSize: 13,
-                                    nameToTemp: 12, tempToHum: 16, humToRange: 22,
-                                    rangeGap: 20, showsRange: true)
+                return GlassMetrics(nameSize: 17, tempSize: 92, tempWeight: .thin,
+                                    humSize: 15, humIcon: 14,
+                                    rangeLabel: 13, rangeValue: 24, rangeGap: 22,
+                                    nameToTemp: 10, tempToHum: 12, humToRange: 16,
+                                    showsRange: true,
+                                    chartHeight: 64, chartCaption: 11)
             }
         }
     }
 
-    /// 仿苹果主题的分尺寸布局。
+    /// 毛玻璃主题的内容。
     ///
-    /// 排版依据 Apple HIG「Widgets → Displaying text in widgets」：
-    ///   - 用系统字体和 SF Symbols（我们是 AppKit，对应 .systemFont + SF Symbols）
-    ///   - 字号不小于 11pt，否则很多人看不清
-    ///   - 大字号用于一眼要看到的关键信息
-    ///
-    /// 结构照着你给的那张 Apple 天气组件截图：
-    ///   左上 位置名 → 巨大温度 → 图标+文字 → 最高/最低
-    /// 我们做温度计，所以：
-    ///   - 位置名换成设备名（设置里可改）
-    ///   - 天气图标和"大部多云"去掉 —— 没有数据源，编一个就是假的
-    ///   - 最高/最低换成当天已测到的最高/最低（不是预报）
-    ///
-    /// 配色不用系统动态色：这张卡固定深紫渐变，白字压在深紫上，
-    /// 文字一律用白色 + 不同透明度表达层级。若用 labelColor，
-    /// 系统切深色时文字变浅，和这层固定紫底就糊在一起了。
-    private func makeAppleContent(dev: Device) -> NSView {
-        let m = AppleMetrics.forSize(size_)
-        let white = NSColor.white
+    /// 骨架照 macOS / iOS 天气组件：左上名字 → 巨大温度 → 湿度 → 最高最低。
+    /// 文字一律白色，用透明度做层级 —— 玻璃后面是壁纸，深浅完全不可控，
+    /// 只有白色能保证任何壁纸下都压得住；用 .labelColor 的话，
+    /// 浅色壁纸下系统给黑字，压在深色玻璃上直接看不见。
+    private func makeGlassContent(dev: Device) -> NSView {
+        let m = GlassMetrics.forSize(size_)
 
-        // --- 第一行：设备名
-        //
-        // 之前这里跟了个 location.fill 箭头，照抄苹果天气的「秦淮区↗」。
-        // 但那个箭头在苹果那里是「点击切换城市」，我们既没有定位、
-        // 也不能点，纯粹是个假交互，看着反而尴尬。去掉。
-        let nameLabel = NSTextField(labelWithString: dev.displayName)
-        nameLabel.font = .systemFont(ofSize: m.nameSize, weight: .semibold)
-        nameLabel.textColor = white
-        nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let nameRow = makeGlassNameRow(dev: dev, m: m)
+        let tempRow = makeGlassTempRow(text: fmt0(dev.reading.temperature), m: m)
+        let humRow = makeGlassHumRow(dev: dev, m: m)
+        let rangeRow = m.showsRange ? makeGlassRangeRow(dev: dev, m: m) : nil
 
-        let nameRow = NSStackView()
-        nameRow.orientation = .horizontal
-        nameRow.alignment = .centerY
-        nameRow.addArrangedSubview(nameLabel)
-
-        // --- 温度大字 + 度数符号
-        let tempRow = makeAppleTempRow(text: fmt0(dev.reading.temperature), m: m)
-
-        // --- 湿度（代替苹果"大部多云"那一行）
-        let humRow: NSStackView
-        do {
-            let humIcon = NSImageView()
-            humIcon.image = NSImage(systemSymbolName: "humidity.fill",
-                                    accessibilityDescription: "湿度")
-            humIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: m.humIconSize,
-                                                                      weight: .regular)
-            humIcon.contentTintColor = white.withAlphaComponent(0.78)
-            humIcon.translatesAutoresizingMaskIntoConstraints = false
-
-            let humLabel = NSTextField(labelWithString: "湿度 \(fmt0(dev.reading.humidity))%")
-            humLabel.font = .systemFont(ofSize: m.humSize, weight: .medium)
-            humLabel.textColor = white.withAlphaComponent(0.92)
-
-            humRow = NSStackView()
-            humRow.orientation = .horizontal
-            humRow.alignment = .centerY
-            humRow.spacing = size_ == .small ? 4 : 6
-            humRow.addArrangedSubview(humIcon)
-            humRow.addArrangedSubview(humLabel)
-        }
-
-        // --- 最高 / 最低。
-        //
-        // 苹果那张是**横排一行**：`最高 13° 最低 6°`。
-        // 我第一版写成上下两行的竖排，和原图一比立刻不对：
-        // 苹果的"最高"两个字是竖着窄挤在大数字左边的，
-        // 也就是「小标签竖排 + 大数字」左右并排，两组再横向排列。
-        // 这里照做：每组内部横排（标签 + 数字），两组之间拉开间距。
-        var rangeRow: NSStackView?
-        if m.showsRange {
-            let range = AppState.shared.todayRange(of: dev)
-            let hiText = range.map { fmt0($0.high) } ?? "--"
-            let loText = range.map { fmt0($0.low) } ?? "--"
-
-            func rangeCell(_ title: String, _ value: String) -> NSView {
-                // 标签一律竖排（「最」在上「高」在下）。
-                // 苹果那三张卡里，最高/最低都是「窄标签 + 大数字」并排的两组，
-                // 小号也一样 —— 我差点按"小号字横排"改，一比对立刻不对：
-                // 苹果小号的「最高」两个字就是上下摞着的。
-                let t = NSTextField(labelWithString: title.map { String($0) }.joined(separator: "\n"))
-                t.font = .systemFont(ofSize: m.rangeLabelSize, weight: .regular)
-                t.textColor = white.withAlphaComponent(0.72)
-                t.alignment = .center
-                t.maximumNumberOfLines = 2
-
-                let v = NSTextField(labelWithString: "\(value)°")
-                v.font = .systemFont(ofSize: m.rangeValueSize, weight: .regular)
-                v.textColor = white
-
-                let s = NSStackView()
-                s.orientation = .horizontal
-                s.alignment = .centerY
-                s.spacing = 3
-                s.addArrangedSubview(t)
-                s.addArrangedSubview(v)
-                return s
-            }
-
-            let r = NSStackView()
-            r.orientation = .horizontal
-            r.alignment = .centerY
-            r.spacing = m.rangeGap
-            r.addArrangedSubview(rangeCell("最高", hiText))
-            r.addArrangedSubview(rangeCell("最低", loText))
-            rangeRow = r
-        }
-
-        // --- 自上而下堆，顶部对齐、底部自然留白。
-        //
-        // 间距照苹果截图的比例定（原图卡高 344）：
-        //   地名 → 大数字   12pt
-        //   大数字 → 湿度   16pt
-        //   湿度 → 最高最低 22pt
-        //   底部留白        67pt (0.195 卡高)
-        //
-        // 之前试过加弹性占位把"最高最低"顶到底部，出来中间一坨大空洞，
-        // 和苹果那张完全不像 —— 苹果的留白是内容自然排完剩下的，
-        // 不是硬撑出来的。这里回到固定间距。
-        // 苹果那张对比图里，三张卡（小/中/大）的内容左边缘都是对齐的一条竖线：
-        // 设备名、温度、湿度、最高最低，全都贴同一条左边。
-        // 之前小号被我改成 .centerX，实机一比差得非常明显 ——
-        // 现在统一 .leading，和桌面上系统自带的小号组件并排才像一家人。
+        // 左列：文字信息。三/四个尺寸都用同一套左对齐 ——
+        // 苹果的组件里「城市 / 温度 / 天气 / 最高最低」左边是一条竖线，
+        // 居中的话会显得卡片中间糊着一坨东西，和桌面上别的组件并排很跳。
         let col = NSStackView()
         col.orientation = .vertical
         col.alignment = .leading
-        col.spacing = 8
+        col.spacing = 0
         col.addArrangedSubview(nameRow)
         col.setCustomSpacing(m.nameToTemp, after: nameRow)
         col.addArrangedSubview(tempRow)
@@ -1168,83 +1135,176 @@ final class WidgetPanel: NSPanel {
             col.addArrangedSubview(rangeRow)
         }
 
-        // 中号是 338×158 的横条：四行竖着摞起来需要 145pt，
-        // 加上 16pt 上下留白就是 177pt，硬塞只会把卡片撑高。
-        // 苹果的中号天气组件也是「左列信息 + 右侧数据」的横向结构，
-        // 所以这里把最高/最低单独拎出来放右边，并且竖排 ——
-        // 横排放在一块 158 高的卡里就是一条细线悬在右边缘，很空。
-        if size_ == .medium, let rangeRow {
-            rangeRow.removeFromSuperview()
+        guard m.chartHeight > 0 else { return col }
+        let chart = makeGlassChart(dev: dev, m: m)
 
-            // 把 rangeRow 里的两组拆出来竖着放
-            let cells = rangeRow.arrangedSubviews
-            let right = NSStackView()
-            right.orientation = .vertical
-            right.alignment = .leading
-            right.spacing = 6
-            for c in cells {
-                c.removeFromSuperview()
-                right.addArrangedSubview(c)
-            }
-
+        if size_ == .medium {
+            // 中号是 338×158 的横条：左列信息 + 右侧曲线。
+            // 和苹果中号天气组件同一个套路（那边右边放的是逐小时预报）。
+            // 不这么做的话，158 高的横条里右半边会空出一大片。
             let row = NSStackView()
             row.orientation = .horizontal
             row.alignment = .centerY
-            row.spacing = 16
+            row.spacing = 18
             row.addArrangedSubview(col)
-
-            // 中间塞一个可拉伸的空白，把右列顶到卡右边缘。
-            // 只靠 hugging 优先级不够稳：col 是纵向 stack，
-            // 它的宽度取值会被"最宽的那个子视图"锚住，
-            // 实测最高/最低只挪到温度右边就停了，右边还空 84pt。
-            let spacer = NSView()
-            spacer.translatesAutoresizingMaskIntoConstraints = false
-            spacer.setContentHuggingPriority(.defaultLow - 1, for: .horizontal)
-            spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            row.addArrangedSubview(spacer)
-            row.addArrangedSubview(right)
-
-            spacer.widthAnchor.constraint(greaterThanOrEqualToConstant: 8).isActive = true
+            row.addArrangedSubview(chart)
+            col.setContentHuggingPriority(.required, for: .horizontal)
+            chart.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            chart.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             return row
         }
+
+        // 大号：竖着堆，曲线跟在最高最低下面，把下半张卡填上。
+        // 间距 16 是按"内容正好落在 322 可用高度里"算的，改字体会连带改它。
+        col.setCustomSpacing(16, after: rangeRow ?? humRow)
+        col.addArrangedSubview(chart)
+        return col
+    }
+
+    private func makeGlassNameRow(dev: Device, m: GlassMetrics) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 5
+
+        // 只在数据断了的时候给一个橙点。正常状态下什么都不加 ——
+        // 苹果那种卡上没有"在线"绿点，多一个点就多一处要跟人解释的东西。
+        if dev.isStale {
+            let dot = NSView()
+            dot.wantsLayer = true
+            dot.layer?.cornerRadius = 2.5
+            dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.widthAnchor.constraint(equalToConstant: 5).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 5).isActive = true
+            row.addArrangedSubview(dot)
+        }
+
+        let name = NSTextField(labelWithString: dev.displayName)
+        name.font = .systemFont(ofSize: m.nameSize, weight: .semibold)
+        name.textColor = NSColor.white.withAlphaComponent(0.96)
+        name.lineBreakMode = .byTruncatingTail
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(name)
+        return row
+    }
+
+    /// 湿度行：图标 + 数值。
+    ///
+    /// 用 drop.fill 而不是 humidity.fill —— 后者在小字号下就是三根波浪线加一个点，
+    /// 缩到 11pt 完全看不出是湿度，还容易被当成渲染糊了。
+    private func makeGlassHumRow(dev: Device, m: GlassMetrics) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = size_ == .small ? 3 : 5
+
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: "drop.fill", accessibilityDescription: "湿度")
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: m.humIcon, weight: .medium)
+        icon.contentTintColor = NSColor.white.withAlphaComponent(0.75)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let value = NSTextField(labelWithString: "\(fmt0(dev.reading.humidity))%")
+        value.font = .systemFont(ofSize: m.humSize, weight: .medium)
+        value.textColor = NSColor.white.withAlphaComponent(0.88)
+
+        row.addArrangedSubview(icon)
+        row.addArrangedSubview(value)
+        return row
+    }
+
+    /// 「最高 25° 最低 22°」一行。
+    ///
+    /// 之前把「最/高」两个字竖着摞起来塞在大数字左边，想模仿苹果那张截图。
+    /// 实机上两个字行高不一样，和大数字并排永远对不齐，看着像文字在打架。
+    /// 改回一行小标签 + 数值，干净、也不用再跟基线较劲。
+    private func makeGlassRangeRow(dev: Device, m: GlassMetrics) -> NSView {
+        let range = AppState.shared.todayRange(of: dev)
+
+        func cell(_ title: String, _ v: Double?) -> NSView {
+            let t = NSTextField(labelWithString: title)
+            t.font = .systemFont(ofSize: m.rangeLabel, weight: .regular)
+            t.textColor = NSColor.white.withAlphaComponent(0.62)
+
+            let n = NSTextField(labelWithString: v.map { "\(fmt0($0))°" } ?? "--")
+            n.font = .systemFont(ofSize: m.rangeValue, weight: .regular)
+            n.textColor = NSColor.white.withAlphaComponent(0.92)
+
+            let s = NSStackView()
+            s.orientation = .horizontal
+            s.alignment = .firstBaseline
+            s.spacing = 3
+            s.addArrangedSubview(t)
+            s.addArrangedSubview(n)
+            return s
+        }
+
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = m.rangeGap
+        row.addArrangedSubview(cell("最高", range?.high))
+        row.addArrangedSubview(cell("最低", range?.low))
+        return row
+    }
+
+    /// 玻璃上的走势曲线：白线 + 很淡的白填充。
+    ///
+    /// 不用系统青色 —— 青色压在深紫玻璃上会泛绿，像从别的界面贴上去的；
+    /// 白线才和整套字色是一家。
+    private func makeGlassChart(dev: Device, m: GlassMetrics) -> NSView {
+        let col = NSStackView()
+        col.orientation = .vertical
+        col.alignment = .leading
+        col.spacing = 5
+
+        let samples = AppState.shared.history(of: dev, hours: 24)
+        let temps = samples.compactMap(\.temp)
+
+        let caption = NSTextField(labelWithString: temps.isEmpty
+            ? "近 24 小时"
+            : "近 24 小时   \(fmt1(temps.min()))° — \(fmt1(temps.max()))°")
+        caption.font = .systemFont(ofSize: m.chartCaption, weight: .regular)
+        caption.textColor = NSColor.white.withAlphaComponent(0.55)
+        col.addArrangedSubview(caption)
+        caption.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+
+        let chart = Sparkline()
+        chart.points = temps
+        chart.lineColor = NSColor.white.withAlphaComponent(0.85)
+        chart.lineWidth = 1.8
+        chart.fillAlpha = 0.12
+        chart.referenceColor = .white
+        let th = AppState.shared.thresholds
+        if th.enabled { chart.reference = th.maxTemp }
+        chart.translatesAutoresizingMaskIntoConstraints = false
+        chart.heightAnchor.constraint(equalToConstant: m.chartHeight).isActive = true
+        col.addArrangedSubview(chart)
+        chart.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
         return col
     }
 
     /// 温度大字 + `°`。
     ///
-    /// `°` 的字号与位置，都是量着苹果原图定的，不是拍脑袋。
-    /// 从苹果那张截图（454×750）里逐像素扫出来的事实：
-    ///   数字「9」墨迹高 96px
-    ///   ° 墨迹 24×24px
-    ///   ° 顶部比数字顶部低 2px，° 中心在数字顶部下方 13.5px
-    /// 换算成比例：° 直径 = 字高的 25%，顶部下沉 2.1%。
+    /// `°` 的字号和位置是量出来的，不是拍脑袋：
+    ///   苹果原图里 ° 墨迹 ≈ 数字字高的 25%，顶部比数字顶低 2%
+    ///   用 SF Pro 的字体度量反推 → ° 字号 ≈ 0.646 × 数字字号，top ≈ 0.099 × 字号
+    /// 固定写死会在换尺寸时飘走，所以按比例算。
     ///
-    /// 再用 SF Pro 的字体度量反推（96pt thin 的数字墨迹高 70pt）：
-    ///   ° 的墨迹高 / 字号 = 0.283
-    ///   ° 的墨迹顶 = 字段顶 + 0.238 × 字号
-    /// 于是字号 S 时要让 ° 墨迹 = 数字字高 × 25%，得 ° 字号 ≈ 0.646 × S；
-    /// 要让 ° 墨迹顶落在数字顶下方 2.1%，top 常量 ≈ 0.099 × S。
-    ///
-    /// 之前固定写 46pt / top 6：° 只有字高的 18.6%，还高出数字顶部 6pt，
-    /// 看着就是「飘在数字右上方的一个小圈」，和苹果的贴顶感完全不同。
-    /// 现在按比例缩放，三个尺寸的观感一致。
-    private func makeAppleTempRow(text: String, m: AppleMetrics) -> NSView {
-        let white = NSColor.white
+    /// 度数符号单独装进容器、手动给上边距，是因为 NSStackView 的
+    /// .firstBaseline 会把两种字号拉到同一条基线，° 会掉到数字腰部去。
+    private func makeGlassTempRow(text: String, m: GlassMetrics) -> NSView {
         let s = m.tempSize
 
         let big = NSTextField(labelWithString: text)
-        // 字重按尺寸给：小/中号 regular，大号 thin。
-        // 苹果那张对比图里，小号卡上的「11°」笔画明显比大号的粗。
         big.font = .systemFont(ofSize: s, weight: m.tempWeight)
-        big.textColor = white
+        big.textColor = .white
 
         let deg = NSTextField(labelWithString: "°")
         deg.font = .systemFont(ofSize: (s * 0.646).rounded(), weight: .light)
-        deg.textColor = white
+        deg.textColor = NSColor.white.withAlphaComponent(0.92)
 
-        // 容器 + 手动上边距。用容器是因为 NSStackView 的 .firstBaseline
-        // 会把两种字号的基线拉到同一水平线，46pt 的字落点按它自己的
-        // 字体度量算，视觉上就掉到数字腰部去了。
         let degBox = NSView()
         degBox.translatesAutoresizingMaskIntoConstraints = false
         deg.translatesAutoresizingMaskIntoConstraints = false
@@ -1258,8 +1318,6 @@ final class WidgetPanel: NSPanel {
 
         let row = NSStackView()
         row.orientation = .horizontal
-        // 用 .top 而不是 .firstBaseline：容器自己已经处理了 ° 的垂直位置，
-        // stack 只需要把两个盒子在顶部对齐即可。
         row.alignment = .top
         row.spacing = s >= 80 ? 1 : 0
         row.addArrangedSubview(big)

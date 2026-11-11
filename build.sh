@@ -43,6 +43,18 @@ echo "==> 拷入 Info.plist"
 # without a usage description"——明明 Info.plist 里有那个键。
 # 换一个新 id 让系统重新弹一次授权，比让用户去手动删 TCC 记录可靠。
 BUNDLE_ID="local.tempbar.app.v3"
+
+# 更新源地址：从 publish.env 读（该文件不进仓库），
+# 没配置就留空 —— 空地址等价于「这个包不提供自动更新」，
+# Updater 会跳过检查，不会报错也不会弹窗。
+if [ -f "./publish.env" ]; then
+  source ./publish.env
+fi
+FEED_URL=""
+if [ -n "$TEMPBAR_BASE_URL" ]; then
+  FEED_URL="$TEMPBAR_BASE_URL/updates.json"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,8 +65,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>TempBar</string>
   <key>CFBundleDisplayName</key><string>TempBar 温度</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.5</string>
-  <key>CFBundleVersion</key><string>7</string>
+  <key>CFBundleShortVersionString</key><string>1.6</string>
+  <key>CFBundleVersion</key><string>8</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIconName</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
@@ -72,7 +84,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
          （见 Updater.swift，校验不过直接中止，不解压更不替换）。 -->
     <key>NSAllowsArbitraryLoads</key><true/>
   </dict>
-  <key>NSUpdateFeedURL</key><string>http://36.111.167.161:8888/tempbar/updates.json</string>
+  <key>NSUpdateFeedURL</key><string>${FEED_URL}</string>
 </dict>
 </plist>
 PLIST

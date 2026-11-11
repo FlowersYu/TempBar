@@ -161,6 +161,9 @@ enum SelfTest {
         // --- 主题切换：尺寸不能被主题带跑，反之亦然
         themeSwitchChecks(dir: dir)
 
+        // --- 毛玻璃：模糊层挂载 + 超椭圆圆角
+        glassChecks()
+
         // --- 改名：自定义名不能被广播冲掉
         renameChecks()
 
@@ -201,7 +204,7 @@ enum SelfTest {
 
         // 空状态在仿苹果主题下也要能看清（深紫底不能配黑字）
         UserDefaults.standard.set(WidgetSize.medium.rawValue, forKey: "tempbar.widget.size")
-        UserDefaults.standard.set(WidgetTheme.apple.rawValue, forKey: "tempbar.widget.theme")
+        UserDefaults.standard.set(WidgetTheme.glass.rawValue, forKey: "tempbar.widget.theme")
         let emptyApple = WidgetPanel()
         emptyApple.rebuild()
         let p5 = (dir as NSString).appendingPathComponent("widget-empty-apple.png")
@@ -237,9 +240,9 @@ enum SelfTest {
         w.rebuild()
         let beforeSize = w.actualSize
 
-        w.applyTheme(.apple)
+        w.applyTheme(.glass)
         let afterApple = w.actualSize
-        let okTheme = w.currentTheme == .apple
+        let okTheme = w.currentTheme == .glass
         let okSize = abs(afterApple.width - beforeSize.width) < 0.5
             && abs(afterApple.height - beforeSize.height) < 0.5
         NSLog("TempBar 自检 [主题] 经典→仿苹果 尺寸 \(Int(afterApple.width))×\(Int(afterApple.height)) "
@@ -256,8 +259,8 @@ enum SelfTest {
               + "→ \(okBack ? "OK" : "错")")
 
         // 小号 + 仿苹果：这个组合以前根本表达不出来
-        w.applyTheme(.apple)
-        let okSmallApple = w.currentTheme == .apple
+        w.applyTheme(.glass)
+        let okSmallApple = w.currentTheme == .glass
             && abs(w.actualSize.width - WidgetSize.small.size.width) < 0.5
         NSLog("TempBar 自检 [主题] 小号+仿苹果 \(okSmallApple ? "OK" : "错")")
 
@@ -275,7 +278,7 @@ enum SelfTest {
 
         let w = WidgetPanel()
         let okSize = w.currentSize == .large
-        let okTheme = w.currentTheme == .apple
+        let okTheme = w.currentTheme == .glass
         NSLog("TempBar 自检 [迁移] 旧值 size=apple → 尺寸=\(w.currentSize.title) "
               + "主题=\(w.currentTheme.title) → "
               + "\(okSize && okTheme ? "OK" : "错")")
@@ -284,7 +287,7 @@ enum SelfTest {
         let storedSize = UserDefaults.standard.string(forKey: "tempbar.widget.size")
         let storedTheme = UserDefaults.standard.string(forKey: "tempbar.widget.theme")
         NSLog("TempBar 自检 [迁移] 落盘 size=\(storedSize ?? "nil") theme=\(storedTheme ?? "nil") → "
-              + "\(storedSize == "large" && storedTheme == "apple" ? "OK" : "错")")
+              + "\(storedSize == "large" && storedTheme == "glass" ? "OK" : "错")")
 
         // 正常值不能被迁移逻辑误伤
         UserDefaults.standard.set("small", forKey: "tempbar.widget.size")
@@ -292,7 +295,7 @@ enum SelfTest {
         let w2 = WidgetPanel()
         NSLog("TempBar 自检 [迁移] 正常值 small+apple → 尺寸=\(w2.currentSize.title) "
               + "主题=\(w2.currentTheme.title) → "
-              + "\(w2.currentSize == .small && w2.currentTheme == .apple ? "OK" : "错")")
+              + "\(w2.currentSize == .small && w2.currentTheme == .glass ? "OK" : "错")")
 
         UserDefaults.standard.set(WidgetSize.medium.rawValue, forKey: "tempbar.widget.size")
         UserDefaults.standard.set(WidgetTheme.classic.rawValue, forKey: "tempbar.widget.theme")
@@ -354,9 +357,13 @@ enum SelfTest {
         // NSAllowsArbitraryLoads 没生效的话，这里会直接报
         // "App Transport Security has blocked a cleartext HTTP"。
         guard ProcessInfo.processInfo.environment["TEMPBAR_NET_TEST"] == "1" else { return }
+        guard let feed = Updater.feedURL else {
+            NSLog("TempBar 自检 [更新] 未配置更新源，跳过")
+            return
+        }
 
         let sem = DispatchSemaphore(value: 0)
-        var req = URLRequest(url: Updater.feedURL)
+        var req = URLRequest(url: feed)
         req.timeoutInterval = 8
         req.cachePolicy = .reloadIgnoringLocalCacheData
         var out = "超时（12 秒没回来）"
@@ -375,7 +382,7 @@ enum SelfTest {
             sem.signal()
         }.resume()
         _ = sem.wait(timeout: .now() + 12)
-        NSLog("TempBar 自检 [更新] 真实拉取 \(Updater.feedURL.absoluteString) → \(out)")
+        NSLog("TempBar 自检 [更新] 真实拉取 \(feed.absoluteString) → \(out)")
     }
 
     private static func sanitizeChecks() {
@@ -454,10 +461,7 @@ enum SelfTest {
         w.rebuild()
         w.layoutIfNeeded()
 
-        guard let card = w.contentView?.subviews.first else {
-            NSLog("TempBar 自检 [深色] 拿不到卡片 → 错")
-            return
-        }
+        let card = w.cardView
         card.appearance = NSAppearance(named: .darkAqua)
         card.layoutSubtreeIfNeeded()
 
@@ -496,10 +500,8 @@ enum SelfTest {
         w.applySize(.small)
         w.layoutIfNeeded()
         let p2 = (dir as NSString).appendingPathComponent("widget-dark-small.png")
-        if let card2 = w.contentView?.subviews.first {
-            let ok2 = snapshot(card2, to: p2, appearance: NSAppearance(named: .darkAqua))
-            NSLog("TempBar 自检 [深色] 小号渲染: \(ok2 ? "OK " + p2 : "失败")")
-        }
+        let ok2 = snapshot(w.cardView, to: p2, appearance: NSAppearance(named: .darkAqua))
+        NSLog("TempBar 自检 [深色] 小号渲染: \(ok2 ? "OK " + p2 : "失败")")
     }
 
     /// 直接读位图字节，不用 colorAt。
@@ -608,8 +610,8 @@ enum SelfTest {
         NSLog("TempBar 自检 [同步] 小组件改小号后，设置里的尺寸 = 「\(wc.selectedSizeTitle)」 "
               + "→ \(sizeOK ? "OK" : "错")")
 
-        w.applyTheme(.apple)
-        let themeOK = wc.selectedThemeTitle == WidgetTheme.apple.title
+        w.applyTheme(.glass)
+        let themeOK = wc.selectedThemeTitle == WidgetTheme.glass.title
         NSLog("TempBar 自检 [同步] 小组件改仿苹果后，设置里的主题 = 「\(wc.selectedThemeTitle)」 "
               + "→ \(themeOK ? "OK" : "错")")
 
@@ -764,7 +766,7 @@ enum SelfTest {
     private static func centeringCheck(_ w: WidgetPanel, label: String) {
         let dir = outputDir
         let p = (dir as NSString).appendingPathComponent("center-\(label).png")
-        guard snapshot(w.contentView?.subviews.first ?? w.contentView!, to: p),
+        guard snapshot(w.cardView, to: p),
               let img = NSImage(contentsOfFile: p),
               let tiff = img.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff) else {
@@ -809,17 +811,39 @@ enum SelfTest {
         //     所以看的是"左边贴到 16pt 留白"，不是左右对称；
         //     经典主题内容居中，才要求左右对称。
         let isLarge = w.currentSize == .large
-        let isAppleTheme = w.currentTheme == .apple
+        let isGlassTheme = w.currentTheme == .glass
         let okV: Bool
         if isLarge {
             okV = padBottom > padTop
         } else {
             okV = abs(padTop - padBottom) <= 8
         }
-        let okH = isAppleTheme ? (padLeft <= 30) : (abs(padLeft - padRight) <= 3)
+        let okH = isGlassTheme ? (padLeft <= 30) : (abs(padLeft - padRight) <= 3)
         NSLog("TempBar 自检 [居中-\(label)] 上\(padTop) 下\(padBottom) "
               + "左\(padLeft) 右\(padRight) → 垂直\(okV ? "OK" : "错（偏上/偏下）") "
               + "水平\(okH ? "OK" : "错（偏左/偏右）")")
+    }
+
+    /// 毛玻璃主题的三条硬约束。
+    ///
+    /// 这类问题渲染截图看不出来：模糊层挂没挂上、圆角是正圆角还是超椭圆，
+    /// 离屏渲染里都得不到真实的模糊效果，只能查视图树的实际状态。
+    private static func glassChecks() {
+        UserDefaults.standard.set(WidgetSize.medium.rawValue, forKey: "tempbar.widget.size")
+        UserDefaults.standard.set(WidgetTheme.glass.rawValue, forKey: "tempbar.widget.theme")
+        let w = WidgetPanel()
+
+        let okBlur = w.blurActive
+        let okSquircle = w.usesSquircleCorners
+        NSLog("TempBar 自检 [玻璃] 背景模糊=\(okBlur ? "已挂" : "没挂") "
+              + "超椭圆圆角=\(okSquircle ? "是" : "否") → \(okBlur && okSquircle ? "OK" : "错")")
+
+        // 切回经典必须把模糊层卸掉，否则经典卡会变成半透明，壁纸直接透上来
+        w.applyTheme(.classic)
+        let okOff = !w.blurActive && !w.usesSquircleCorners
+        NSLog("TempBar 自检 [玻璃] 切回经典后模糊已卸载=\(okOff ? "OK" : "错（壁纸会透上来）")")
+
+        UserDefaults.standard.set(WidgetTheme.classic.rawValue, forKey: "tempbar.widget.theme")
     }
 
     /// 模拟用户在右键菜单里点"小号"再点"中号"。
