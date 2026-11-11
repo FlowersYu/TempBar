@@ -10,9 +10,14 @@
 set -e
 cd "$(dirname "$0")"
 
-SERVER="${TEMPBAR_SERVER:-root@36.111.167.161}"
+# 服务器地址不写在仓库里（仓库是公开的），
+# 放在同目录的 publish.env 中，参考 publish.env.example。 
+if [ -f "./publish.env" ]; then
+  source ./publish.env
+fi
+SERVER="${TEMPBAR_SERVER:?没有配置服务器地址。复制 publish.env.example 为 publish.env 并填好 TEMPBAR_SERVER}"
 REMOTE="${TEMPBAR_REMOTE:-/var/www/tempbar}"
-BASE_URL="${TEMPBAR_BASE_URL:-http://36.111.167.161:8888/tempbar}"
+BASE_URL="${TEMPBAR_BASE_URL:?没有配置下载地址，请在 publish.env 里设置 TEMPBAR_BASE_URL}"
 NOTES="${1:-常规更新}"
 
 # 先编译。package.sh 只负责打包，不会重新编译 ——

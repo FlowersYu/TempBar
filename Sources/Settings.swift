@@ -16,9 +16,11 @@ final class SettingsWindowController: NSWindowController {
     private var sizePopup: NSPopUpButton!
     private var themePopup: NSPopUpButton!
     private var updateButton: NSButton!
-    private var nameField: NSTextField!
+    /// 内部可见：自检要直接驱动真实的输入框，而不是绕过 UI 调 state
+    var nameField: NSTextField!
     private var nameHint: NSTextField!
     private var resetNameBtn: NSButton!
+    private var scrollView: NSScrollView!
 
     convenience init() {
         let win = NSWindow(
@@ -33,6 +35,50 @@ final class SettingsWindowController: NSWindowController {
         self.init(window: win)
         buildUI()
         loadValues()
+
+        // 右键菜单也能改尺寸/主题，改完这里必须跟着变。
+        // 之前只在 loadValues 里读一次，所以设置窗口开着时从菜单改尺寸，
+        // 下拉框还是旧选中项 —— 用户再点一下就又改回去了。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(widgetStyleChangedExternally),
+            name: .tempbarWidgetStyleChanged, object: nil
+        )
+    }
+
+    /// 设置窗口每次显示都回到顶部。
+    ///
+    /// 之前打开时是停在中间的「软件更新 / 检查更新」那一行（滚动区原点落在
+    /// 文档底部），每次都要手动往上滚才能看到「常规」。根因是 documentView
+    /// 不是 flipped，初始滚动原点在文档左下角。这里双保险：文档视图改成
+    /// flipped，显示时再显式滚到原点。
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        window?.contentView?.layoutSubtreeIfNeeded()
+        scrollToTop()
+    }
+
+    func scrollToTop() {
+        guard let scroll = scrollView, scroll.documentView != nil else { return }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+
+    /// 当前滚动偏移，自检用来确认"打开时在最上面"
+    var scrollOffsetY: CGFloat {
+        scrollView?.contentView.bounds.origin.y ?? 0
+    }
+
+    /// 滚动区的文档视图是否 flipped —— 打开时停不停止在顶部就取决于它
+    var documentIsFlipped: Bool {
+        scrollView?.documentView?.isFlipped ?? false
+    }
+
+    /// 自检用：两个下拉当前选中的标题
+    var selectedSizeTitle: String { sizePopup?.titleOfSelectedItem ?? "" }
+    var selectedThemeTitle: String { themePopup?.titleOfSelectedItem ?? "" }
+
+    @objc private func widgetStyleChangedExternally() {
+        syncWidgetStyle()
     }
 
     private func buildUI() {
@@ -45,8 +91,15 @@ final class SettingsWindowController: NSWindowController {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(scroll)
+        scrollView = scroll
 
-        let content = NSView()
+        // documentView 必须是 flipped 的。
+        //
+        // 普通 NSView 的原点在左下角，滚动区的初始滚动原点 (0,0) 落的是
+        // **文档底部**，内容比窗口高的时候一打开就停在中间 ——
+        // 用户看到的就是"滚轮默认不在最上面，停在检查版本那一行"。
+        // 翻过来之后 (0,0) 就是左上角，打开即顶部。
+        let content = FlippedView()
         content.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = content
 
@@ -167,7 +220,7 @@ final class SettingsWindowController: NSWindowController {
         nameField.font = .systemFont(ofSize: 13)
         nameField.placeholderString = "起个名字，如「办公室温湿度计」"
         nameField.target = self
-        nameField.action = #selector(nameCommitted)
+        nameField.action = #selector(commitNameField)
         nameField.delegate = self
         // 宽度不要写死：写死 200 会和左边的副标题一起挤爆行宽。
         // 给一个保底值 + 让它可以被拉伸即可。
@@ -401,7 +454,10 @@ final class SettingsWindowController: NSWindowController {
         // 而内容长什么样取决于主题，所以主题要在尺寸定下来之后再落。
         widget.applySize(size)
         widget.applyTheme(theme)
-        widget.showWidget()
+        // 走 delegate 而不是 widget.showWidget()：后者只把窗口显示出来，
+        // UserDefaults 里的"要不要显示小组件"还是关着的，
+        // 紧接着 syncWidgetSwitch 会把刚点开的开关又掰回去。
+        (NSApp.delegate as? AppDelegate)?.setWidgetVisible(true)
         widgetSwitch.state = .on
         // 回写一次，防住"两个下拉同时改"时的竞态
         syncWidgetStyle()
@@ -546,7 +602,8 @@ final class SettingsWindowController: NSWindowController {
         reloadDevices()
     }
 
-    @objc private func nameCommitted() {
+    /// 提交输入框里的名字。回车、失焦、以及对话框都走这一条路径。
+    @objc func commitNameField() {
         guard let dev = currentDevice() else { return }
         AppState.shared.setCustomName(nameField.stringValue, for: dev.id)
         reloadDevices()
@@ -576,8 +633,61 @@ extension SettingsWindowController: NSTextFieldDelegate {
     /// 会把输入法组字过程中的中间态也存进去。
     func controlTextDidEndEditing(_ obj: Notification) {
         guard let f = obj.object as? NSTextField, f === nameField else { return }
-        nameCommitted()
+        commitNameField()
     }
+}
+
+// MARK: - 重命名对话框
+
+/// 小组件右键「重命名设备…」走这里的模态对话框。
+///
+/// 为什么不再只靠设置窗口里那个输入框：同事反馈"装完改不了名字"。
+/// 设置窗口那条路径要先让 accessory app 拿到前台、再滚到设备区、
+/// 再点中输入框才能打字，任何一步焦点没拿到，用户看到的就是"打不了字"。
+/// 对话框是模态的，弹出时自己抢焦点，路径最短；而且没有设备时能直接
+/// 说清"还没收到广播"，而不是丢一个灰掉的输入框给人猜。
+enum RenamePrompt {
+    static func show(deviceID: String? = nil) {
+        let state = AppState.shared
+        let dev = deviceID.flatMap { state.devices[$0] } ?? state.primary
+
+        // 先抢前台，否则输入框看得见、打不了字
+        AppDelegate.bringToFront()
+
+        guard let dev else {
+            let a = NSAlert()
+            a.alertStyle = .informational
+            a.messageText = "还没有收到温度计的数据"
+            a.informativeText = "改名得先有一台温度计在广播。确认蓝牙已打开、"
+                + "温度计在 10 米内，等菜单栏出现温度数字后再试。"
+            a.addButton(withTitle: "好")
+            a.runModal()
+            return
+        }
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = dev.customName ?? ""
+        field.placeholderString = "如「办公室温湿度计」"
+        field.font = .systemFont(ofSize: 13)
+
+        let alert = NSAlert()
+        alert.messageText = "重命名「\(dev.firmwareName)」"
+        alert.informativeText = "只改这台电脑上显示的名字，不影响温度计本身。"
+            + "留空即为恢复原始名称。"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        alert.window.initialFirstResponder = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        state.setCustomName(field.stringValue, for: dev.id)
+    }
+}
+
+/// 设置窗口滚动区的文档视图。
+/// 必须是 flipped：原点在左上角，滚动区初始位置才是"最上面"。
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 // MARK: - 开机启动

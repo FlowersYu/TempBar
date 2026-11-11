@@ -284,7 +284,12 @@ final class AppState {
 
     /// 给设备改一个用户自定义的名字。传 nil / 空字符串表示恢复成固件名。
     func setCustomName(_ name: String?, for deviceID: String) {
-        guard let dev = devices[deviceID] else { return }
+        guard let dev = devices[deviceID] else {
+            // 以前这里静默 return：调用方以为改成功了，界面上什么都没变。
+            // 留一条日志，出问题时能从控制台直接看出是"设备不在了"还是"名字没存"。
+            NSLog("TempBar 改名失败：找不到设备 \(deviceID)")
+            return
+        }
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         dev.customName = trimmed.isEmpty ? nil : trimmed
         persist()
@@ -361,7 +366,13 @@ final class AppState {
             }
         )
         guard let data = try? JSONEncoder().encode(snap) else { return }
-        try? data.write(to: Self.file, options: .atomic)
+        // 写盘失败以前是彻底静默的：改名、历史全都不落盘，界面上又看不出来。
+        // 留一条日志，用户截图控制台就能定位（权限、磁盘满、路径被挡）。
+        do {
+            try data.write(to: Self.file, options: .atomic)
+        } catch {
+            NSLog("TempBar state.json 写入失败：\(error)")
+        }
         thresholds.save()
     }
 

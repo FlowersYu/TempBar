@@ -396,8 +396,11 @@ final class WidgetPanel: NSPanel {
 
         menu.addItem(.separator())
 
+        // 直接弹重命名对话框，不再借道设置窗口。
+        // 之前这里接的是 openSettings：点了只是打开设置，输入框还藏在第三屏，
+        // 同事根本不知道该在哪儿改，报的就是"装完改不了名字"。
         let rename = NSMenuItem(title: "重命名设备…",
-                                action: #selector(openSettings), keyEquivalent: "")
+                                action: #selector(renameDevice), keyEquivalent: "")
         rename.target = self
         menu.addItem(rename)
 
@@ -426,6 +429,20 @@ final class WidgetPanel: NSPanel {
         applyTheme(t)
     }
 
+    @objc private func renameDevice() {
+        RenamePrompt.show()
+    }
+
+    /// 尺寸/主题被右键菜单改掉之后，设置窗口里的两个下拉必须跟着变。
+    ///
+    /// 之前只写了 UserDefaults，设置窗口没人通知 —— 它只在 loadValues 时读一次，
+    /// 所以"右键改成小号 → 打开设置 → 下拉还写的中号"，用户再点一下又给改回去。
+    /// 用通知而不是直接拿 AppDelegate，是因为设置窗口可能在自检里单独构造，
+    /// 那时根本没有 delegate。
+    private func postStyleChanged() {
+        NotificationCenter.default.post(name: .tempbarWidgetStyleChanged, object: nil)
+    }
+
     /// 切换尺寸。
     ///
     /// 这里顺序很关键，之前"缩小回不去"就是顺序错了：
@@ -439,6 +456,7 @@ final class WidgetPanel: NSPanel {
         guard s != size_ || frame.size != s.size else { return }
         size_ = s
         UserDefaults.standard.set(s.rawValue, forKey: Self.sizeKey)
+        postStyleChanged()
 
         let origin = frame.origin
 
@@ -474,6 +492,7 @@ final class WidgetPanel: NSPanel {
         guard t != theme_ else { return }
         theme_ = t
         UserDefaults.standard.set(t.rawValue, forKey: Self.themeKey)
+        postStyleChanged()
 
         applyCardStyle()
         installContentConstraints()
@@ -1281,4 +1300,9 @@ final class WidgetPanel: NSPanel {
         row.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
         return col
     }
+}
+
+extension Notification.Name {
+    /// 小组件的尺寸/主题被改动了（右键菜单、设置窗口、自检都算）
+    static let tempbarWidgetStyleChanged = Notification.Name("tempbar.widgetStyleChanged")
 }

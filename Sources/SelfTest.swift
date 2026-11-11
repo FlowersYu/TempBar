@@ -173,6 +173,15 @@ enum SelfTest {
         // --- 设置窗口（含设备名输入行）也要能正常布局
         settingsChecks(dir: dir)
 
+        // --- 设置窗口打开时应该停在最上面（不是停在「检查更新」那一行）
+        settingsScrollChecks()
+
+        // --- 右键改尺寸/主题后，设置里的下拉要跟着变
+        styleSyncChecks()
+
+        // --- 改名走真实输入框路径
+        renameFieldChecks()
+
         // --- 越界读数过滤（236° 那种）
         sanitizeChecks()
 
@@ -561,6 +570,88 @@ enum SelfTest {
 
         let p = (dir as NSString).appendingPathComponent("settings.png")
         NSLog("TempBar 自检 [设置] 截图: \(snapshot(content, to: p) ? "OK " + p : "失败")")
+    }
+
+    /// 设置窗口一打开必须停在最上面。
+    ///
+    /// 用户报的原话：「滚轮默认不是在最上面，是在检查版本那一行」。
+    /// 根因是滚动区的 documentView 不是 flipped —— 普通 NSView 原点在左下角，
+    /// 滚动原点 (0,0) 落在文档底部，内容比窗口高一截时一打开就停在中间，
+    /// 所以要往上滚才看得到「常规」。
+    private static func settingsScrollChecks() {
+        let wc = SettingsWindowController()
+        guard let win = wc.window, let content = win.contentView else { return }
+        win.setContentSize(NSSize(width: 420, height: 560))
+        content.layoutSubtreeIfNeeded()
+
+        let flipped = wc.documentIsFlipped
+        let off = wc.scrollOffsetY
+        let ok = flipped && abs(off) < 0.5
+        NSLog("TempBar 自检 [设置滚轮] 文档 flipped=\(flipped) 偏移=\(Int(off))pt "
+              + "→ \(ok ? "OK（打开即顶部）" : "错（没停在最上面）")")
+    }
+
+    /// 右键菜单改尺寸/主题之后，设置窗口里的两个下拉必须跟着变。
+    /// 用户报的第 1 个 bug：小组件改成小号了，设置里还写着中号。
+    private static func styleSyncChecks() {
+        UserDefaults.standard.set(WidgetSize.medium.rawValue, forKey: "tempbar.widget.size")
+        UserDefaults.standard.set(WidgetTheme.classic.rawValue, forKey: "tempbar.widget.theme")
+
+        let wc = SettingsWindowController()
+        wc.window?.setContentSize(NSSize(width: 420, height: 560))
+        wc.window?.contentView?.layoutSubtreeIfNeeded()
+
+        // 模拟右键菜单「尺寸 → 小号」「主题 → 仿苹果」
+        let w = WidgetPanel()
+        w.applySize(.small)
+        let sizeOK = wc.selectedSizeTitle == WidgetSize.small.title
+        NSLog("TempBar 自检 [同步] 小组件改小号后，设置里的尺寸 = 「\(wc.selectedSizeTitle)」 "
+              + "→ \(sizeOK ? "OK" : "错")")
+
+        w.applyTheme(.apple)
+        let themeOK = wc.selectedThemeTitle == WidgetTheme.apple.title
+        NSLog("TempBar 自检 [同步] 小组件改仿苹果后，设置里的主题 = 「\(wc.selectedThemeTitle)」 "
+              + "→ \(themeOK ? "OK" : "错")")
+
+        // 还原，后面的检查还要用「中号 + 经典」
+        w.applySize(.medium)
+        w.applyTheme(.classic)
+        w.orderOut(nil)
+    }
+
+    /// 改名要能走通真实的输入框路径。
+    /// 用户报的第 2 个 bug：同事装完改不了名字 —— 以前自检只验证了
+    /// `state.setCustomName`，完全没碰输入框，UI 这条路是裸奔的。
+    private static func renameFieldChecks() {
+        let state = AppState.shared
+        let id = "SELFTEST-DEVICE"
+        guard state.devices[id] != nil else {
+            NSLog("TempBar 自检 [改名UI] 找不到测试设备，跳过")
+            return
+        }
+
+        let wc = SettingsWindowController()
+        wc.window?.setContentSize(NSSize(width: 420, height: 560))
+        wc.window?.contentView?.layoutSubtreeIfNeeded()
+        guard wc.nameField.isEnabled else {
+            NSLog("TempBar 自检 [改名UI] 有设备但输入框是灰的 → 错")
+            return
+        }
+
+        wc.nameField.stringValue = "UI 改名测试"
+        wc.commitNameField()
+
+        let shown = state.devices[id]?.displayName ?? "?"
+        NSLog("TempBar 自检 [改名UI] 输入框提交后显示名 = 「\(shown)」 "
+              + "→ \(shown == "UI 改名测试" ? "OK" : "错")")
+
+        // 提交后输入框不能和模型脱钩（reloadDevices 里读回的值要一致）
+        let fieldText = wc.nameField.stringValue
+        NSLog("TempBar 自检 [改名UI] 提交后输入框内容 = 「\(fieldText)」 "
+              + "→ \(fieldText == "UI 改名测试" ? "OK" : "错")")
+
+        // 还原成固件名，别把测试名带进后面的检查
+        state.setCustomName(nil, for: id)
     }
 
     /// 只看内存里的值是不够的 —— 真正的坑是 persist 时没把新字段写出去。

@@ -45,6 +45,15 @@
   nav .sp{flex:1}
   nav a.link{font-size:14px;color:var(--ink-2);margin-left:22px}
   nav a.link:hover{color:var(--green)}
+  nav a.gh{
+    display:inline-flex;align-items:center;gap:7px;
+    font-size:14px;color:var(--ink-2);margin-left:22px;
+    padding:6px 13px;border-radius:10px;
+    border:1px solid var(--line);background:rgba(255,255,255,.6);
+    transition:color .18s ease,border-color .18s ease,background .18s ease;
+  }
+  nav a.gh:hover{color:var(--green);border-color:rgba(14,76,60,.3);background:#fff}
+  nav a.gh svg{flex:none}
   @media(max-width:680px){nav a.link{display:none}}
 
   /* ---------- Hero ---------- */
@@ -153,6 +162,8 @@
   summary::after{content:"+";color:var(--ink-2);font-weight:400;font-size:20px;line-height:1}
   details[open] summary::after{content:"–"}
   details p{font-size:14px;color:var(--ink-2);padding:0 0 18px}
+  details p a{border-bottom:1px solid rgba(14,76,60,.3)}
+  details p a:hover{color:var(--green-2);border-bottom-color:var(--green-2)}
 
   /* ---------- 页脚 ---------- */
   footer{
@@ -185,6 +196,10 @@
     <a class="link" href="#shots">界面</a>
     <a class="link" href="#install">安装</a>
     <a class="link" href="#faq">常见问题</a>
+    <a class="gh" href="https://github.com/FlowersYu/TempBar" target="_blank" rel="noopener" title="在 GitHub 上查看源码">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
   </div>
 </nav>
 
@@ -200,6 +215,10 @@
       <div class="cta">
         <a class="btn" href="TempBar.zip" download>下载 macOS 版</a>
         <a class="btn ghost" href="#install">怎么装</a>
+        <a class="btn ghost" href="https://github.com/FlowersYu/TempBar" target="_blank" rel="noopener">
+          <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          源码
+        </a>
       </div>
       <p class="meta">
         <span>版本 <b id="ver">1.5</b></span>
@@ -338,6 +357,10 @@
       <p>没有。所有读数都存在本机的 <code>~/Library/Application Support/TempBar</code>，不上传、不联网。唯一的网络请求是你在菜单里主动点「检查更新」时去拉一次版本清单。</p>
     </details>
     <details>
+      <summary>源码在哪儿？能自己编译吗？</summary>
+      <p>源码在 <a href="https://github.com/FlowersYu/TempBar" target="_blank" rel="noopener">github.com/FlowersYu/TempBar</a>，纯 Swift 写的，没有任何第三方依赖。仓库里跑 <code>./build.sh</code> 就能编译出 <code>.app</code>，改一下 <code>swiftc</code> 的 <code>-target</code> 还能出 Intel 版本。有 bug 或者想加功能，直接在上面提 issue。</p>
+    </details>
+    <details>
       <summary>支持 Intel Mac 吗？</summary>
       <p>当前发布的包是 Apple Silicon 版本。Intel 机器需要自己用源码编译，把 <code>build.sh</code> 里 <code>swiftc</code> 的 <code>-target</code> 改成 <code>x86_64-apple-macos13.0</code> 再跑一次即可。</p>
     </details>
@@ -354,6 +377,7 @@
       <a href="TempBar.zip">下载</a>
       <a href="updates.json">更新清单</a>
       <a href="#faq">帮助</a>
+      <a href="https://github.com/FlowersYu/TempBar" target="_blank" rel="noopener">GitHub</a>
     </div>
   </div>
 </footer>

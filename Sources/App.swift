@@ -270,13 +270,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: 设置
 
+    /// 把 App 真正顶到最前面。
+    ///
+    /// 我们是 accessory app（没有 Dock 图标），系统对它的前台激活比普通 App 更保守：
+    /// 只 `makeKeyAndOrderFront` 的话，窗口画出来了但没拿到键盘焦点，
+    /// 表现就是"设置里的输入框点了没反应、打不了字"——同事装完改不了名字就是这个。
+    /// macOS 14 起 `activate(ignoringOtherApps:)` 被标废弃，新接口是无参 `activate()`，
+    /// 两个都叫一次，旧系统走前者、新系统走后者。
+    static func bringToFront() {
+        NSApp.activate(ignoringOtherApps: true)
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        }
+    }
+
     @objc func openSettings() {
         if settingsWC == nil {
             settingsWC = SettingsWindowController()
         }
-        NSApp.activate(ignoringOtherApps: true)
+        Self.bringToFront()
         settingsWC?.showWindow(nil)
         settingsWC?.window?.makeKeyAndOrderFront(nil)
+        settingsWC?.window?.orderFrontRegardless()
+
+        // 首次激活是异步的，系统有时会把这一轮的 makeKey 吃掉，
+        // 结果窗口在前台但输入框打不了字。下一轮回调补一次 makeKey，
+        // 代价几乎为零。
+        DispatchQueue.main.async { [weak self] in
+            self?.settingsWC?.window?.makeKey()
+        }
     }
 
     @objc private func quitApp() {

@@ -2,3 +2,6 @@
 build/
 dist/
 *.iconset/
+
+# 本机的服务器地址，不要进仓库
+publish.env
